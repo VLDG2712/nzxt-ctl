@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "daemon",
+    "gui",
+]
+
+# Declared at the workspace root - Cargo ignores [profile.*] in member
+# crates and warns about it.
+[profile.release]
+opt-level = 3
+lto = true

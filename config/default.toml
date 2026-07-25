@@ -1,0 +1,54 @@
+# nzxt-ctl daemon configuration
+#
+# hwmon base_path: found via `ls /sys/class/hwmon/` and matching the entry
+# whose `name` file contains "kraken2023elite" (or similar). This number
+# (hwmon5 in the reference setup) can change across reboots/kernel updates -
+# check it if the daemon fails to start.
+# Poll interval - how often the daemon re-reads temp and re-evaluates curves.
+# Must come BEFORE any [table] section below - in TOML, bare keys after a
+# [table] header are parsed as belonging to that table, not the top level.
+poll_interval_ms = 1000
+
+[hwmon]
+# Device name as reported by /sys/class/hwmon/hwmonN/name - resolved
+# automatically at daemon startup, so this survives hwmonN renumbering
+# across reboots/kernel updates.
+device_name = "kraken2023elite"
+
+[mode]
+# "performance" = both pump+fan forced to 100%, ignoring curves.
+# "silent" = both held at silent_duty_pct, ignoring curves (but the
+#   failsafe below still applies).
+# "auto" = uses pump_curve/fan_curve below, exactly as previously built.
+active = "auto"
+silent_duty_pct = 40
+# SAFETY: if liquid temp reaches this, pump+fan are forced to 100%
+# regardless of active mode. Minimum allowed value is 40.0 (enforced at
+# load time) to prevent accidentally disabling this protection.
+failsafe_temp_c = 60.0
+
+# Pump curve: generally kept high and fairly flat (pumps are quieter than
+# fans at a given RPM and coolant flow matters more than pump noise).
+# Pump curve: generally kept high and fairly flat (pumps are quieter than
+# fans at a given RPM and coolant flow matters more than pump noise).
+# temp_source: which reading drives this curve - "liquid", "cpu", or "gpu".
+[pump_curve]
+temp_source = "liquid"
+points = [
+    { temp_c = 20.0, duty_pct = 50 },
+    { temp_c = 35.0, duty_pct = 60 },
+    { temp_c = 45.0, duty_pct = 75 },
+    { temp_c = 55.0, duty_pct = 100 },
+]
+
+# Fan curve: more aggressive ramp since fans are the primary noise/cooling
+# tradeoff point most people actually tune.
+[fan_curve]
+temp_source = "liquid"
+points = [
+    { temp_c = 20.0, duty_pct = 30 },
+    { temp_c = 35.0, duty_pct = 45 },
+    { temp_c = 45.0, duty_pct = 65 },
+    { temp_c = 55.0, duty_pct = 90 },
+    { temp_c = 65.0, duty_pct = 100 },
+]

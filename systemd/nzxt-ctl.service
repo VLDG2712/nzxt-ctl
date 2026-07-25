@@ -1,0 +1,21 @@
+[Unit]
+Description=NZXT Kraken fan/pump curve control daemon
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nzxt-ctl-daemon
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+Environment=NZXT_CTL_CONFIG=/etc/nzxt-ctl/config.toml
+
+# The daemon writes to /sys/class/hwmon/... which requires root.
+# Consider narrowing this later via a udev rule granting a dedicated
+# group write access to the specific pwm*/pwm*_enable files instead of
+# running the whole daemon as root - noted as a follow-up hardening step,
+# not done here since it depends on your exact udev setup.
+User=root
+
+[Install]
+WantedBy=multi-user.target
