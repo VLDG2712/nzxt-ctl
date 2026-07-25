@@ -1,0 +1,10 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Name=NZXT Control
+GenericName=Cooling Control
+Comment=Pump and fan curve control for NZXT Kraken
+Exec=nzxt-ctl-gui
+Icon=cpu
+Terminal=false
+Categories=System;Settings;HardwareSettings;Qt;KDE;

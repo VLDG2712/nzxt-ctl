@@ -1,0 +1,6 @@
+# Config must be writable by the nzxt-ctl group so the (non-root) GUI can
+# save curves. The group itself comes from sysusers.d/nzxt-ctl.conf, which
+# pacman's hooks apply before tmpfiles run. The daemon creates and chowns
+# /run/nzxt-ctl itself, so no entry is needed for it here.
+z /etc/nzxt-ctl 0775 root nzxt-ctl -
+z /etc/nzxt-ctl/config.toml 0664 root nzxt-ctl -
