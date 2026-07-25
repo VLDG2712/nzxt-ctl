@@ -1,0 +1,10 @@
+[package]
+name = "nzxt-ctl-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1.1.3"
+anyhow = "1"
+log = "0.4"

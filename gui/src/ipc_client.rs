@@ -1,37 +1,9 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use nzxt_ctl_common::ipc::{Request, Response, SOCKET_PATH};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-const SOCKET_PATH: &str = "/run/nzxt-ctl/daemon.sock";
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LiveState {
-    pub liquid_temp_c: Option<f32>,
-    pub cpu_temp_c: Option<f32>,
-    pub gpu_temp_c: Option<f32>,
-    pub pump_rpm: Option<u32>,
-    pub fan_rpm: Option<u32>,
-    pub pump_duty_pct: Option<u8>,
-    pub fan_duty_pct: Option<u8>,
-    pub active_mode: Option<String>,
-    pub failsafe_active: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "action")]
-enum Request {
-    GetState,
-    ReloadConfig,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "status")]
-enum Response {
-    Ok { state: LiveState },
-    ReloadOk,
-    Error { message: String },
-}
+pub use nzxt_ctl_common::ipc::LiveState;
 
 /// Opens a fresh connection per call rather than holding one open. Simpler
 /// and avoids stale-connection bugs if the daemon restarts - the overhead

@@ -41,7 +41,7 @@ pub struct ModeConfig {
     /// to 100% regardless of active mode (including Silent and even a
     /// misconfigured Auto curve). This is a deliberate defense-in-depth
     /// backstop, not something the user is expected to tune down casually -
-    /// validated to be at least 40C on load, see Config::load.
+    /// validated to be at least 40C, see Config::validate.
     #[serde(default = "default_failsafe_temp")]
     pub failsafe_temp_c: f32,
 }
@@ -127,9 +127,10 @@ impl ChannelCurve {
         100
     }
 
-    /// Basic sanity validation - called after loading from disk, since this
-    /// config drives physical hardware and a malformed curve (e.g. duty
-    /// dropping as temp rises) should be rejected loudly, not applied.
+    /// Basic sanity validation - called after loading from disk and before
+    /// the GUI writes to disk, since this config drives physical hardware
+    /// and a malformed curve (e.g. duty dropping as temp rises) should be
+    /// rejected loudly, not applied.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.points.is_empty() {
             anyhow::bail!("curve has no points");
@@ -182,20 +183,28 @@ impl Config {
             .map_err(|e| anyhow::anyhow!("failed to read config at {:?}: {}", path, e))?;
         let cfg: Config = toml::from_str(&text)
             .map_err(|e| anyhow::anyhow!("failed to parse config: {}", e))?;
-        cfg.pump_curve.validate()?;
-        cfg.fan_curve.validate()?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// The full sanity check shared by the daemon (on load/reload) and the
+    /// GUI (before writing the file), so a config one side rejects is never
+    /// produced by the other.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.pump_curve.validate()?;
+        self.fan_curve.validate()?;
         // Guard against a dangerously low failsafe threshold - e.g. a typo
         // of 6.0 instead of 60.0 would make the failsafe fire constantly
         // and effectively disable Silent/Performance modes entirely. 40C
         // is a conservative floor; liquid temp rarely drops below ambient
         // room temp (~15-25C) at idle, so this still leaves real headroom.
-        if cfg.mode.failsafe_temp_c < 40.0 {
+        if self.mode.failsafe_temp_c < 40.0 {
             anyhow::bail!(
                 "mode.failsafe_temp_c={} is suspiciously low (min allowed: 40.0) - refusing to load, this would make the safety override fire during normal operation",
-                cfg.mode.failsafe_temp_c
+                self.mode.failsafe_temp_c
             );
         }
-        Ok(cfg)
+        Ok(())
     }
 
     pub fn default_path() -> std::path::PathBuf {

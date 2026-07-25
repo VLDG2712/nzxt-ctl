@@ -1,59 +1,11 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use nzxt_ctl_common::ipc::{LiveState, Request, Response, SOCKET_PATH};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// Snapshot of live state, shared between the control loop (writer) and
-/// any number of connected GUI clients (readers). Deliberately simple -
-/// one struct, one mutex, no per-field locking, since update frequency
-/// (~1/sec) and payload size are both small enough that lock contention
-/// is not a real concern here.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LiveState {
-    pub liquid_temp_c: Option<f32>,
-    pub cpu_temp_c: Option<f32>,
-    pub gpu_temp_c: Option<f32>,
-    pub pump_rpm: Option<u32>,
-    pub fan_rpm: Option<u32>,
-    pub pump_duty_pct: Option<u8>,
-    pub fan_duty_pct: Option<u8>,
-    /// Which mode the daemon is actually running, as ground truth - the
-    /// GUI displays this rather than assuming its own last-selected value
-    /// is still accurate (e.g. after an external config edit or reload).
-    pub active_mode: Option<String>,
-    /// Whether the safety failsafe is currently overriding the active
-    /// mode this cycle - surfaced so the GUI can show a clear warning
-    /// rather than silent 100% duty with no explanation.
-    pub failsafe_active: bool,
-}
-
 pub type SharedState = Arc<Mutex<LiveState>>;
-
-/// Requests the GUI can send over the socket. Kept minimal for v1 - just
-/// reading state and reloading config after an external edit. Direct
-/// curve-point mutation over IPC is a deliberate NOT-yet-implemented gap:
-/// see the note in handle_client below.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "action")]
-enum Request {
-    GetState,
-    /// GUI writes /etc/nzxt-ctl/config.toml directly (it needs to anyway,
-    /// so the config survives daemon restarts), then asks the daemon to
-    /// pick up the change without a full restart.
-    ReloadConfig,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "status")]
-enum Response {
-    Ok { state: LiveState },
-    ReloadOk,
-    Error { message: String },
-}
-
-const SOCKET_PATH: &str = "/run/nzxt-ctl/daemon.sock";
 
 /// Dedicated group that both the socket and /etc/nzxt-ctl/config.toml are
 /// shared through, so a non-root GUI process can talk to the root-owned
@@ -130,16 +82,34 @@ pub fn start_server(reload_flag: Arc<std::sync::atomic::AtomicBool>) -> Result<S
     Ok(state)
 }
 
+/// Cap on a single request line. Real requests are under 100 bytes; an
+/// unbounded read_line would let a client grow the daemon's memory without
+/// limit. Mostly moot while the socket is group-restricted (0660), but
+/// cheap insurance in case those permissions are ever loosened.
+const MAX_REQUEST_BYTES: u64 = 64 * 1024;
+
 fn handle_client(
     stream: UnixStream,
     state: SharedState,
     reload_flag: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     let mut writer = stream.try_clone()?;
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream).take(MAX_REQUEST_BYTES);
+    let mut line = String::new();
 
-    for line in reader.lines() {
-        let line = line?;
+    loop {
+        line.clear();
+        reader.set_limit(MAX_REQUEST_BYTES);
+        if reader.read_line(&mut line)? == 0 {
+            break; // EOF - client disconnected
+        }
+        // read_line stopping short of a newline with the limit exhausted
+        // means the line is oversized; drop the client rather than trying
+        // to resynchronise mid-line. (No newline with limit remaining is
+        // just a final unterminated line at EOF - process it normally.)
+        if !line.ends_with('\n') && reader.limit() == 0 {
+            anyhow::bail!("request exceeded {} bytes - dropping client", MAX_REQUEST_BYTES);
+        }
         if line.trim().is_empty() {
             continue;
         }

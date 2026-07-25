@@ -1,10 +1,9 @@
-mod config;
 mod control;
 mod hwmon;
 mod ipc;
 
 use anyhow::Result;
-use config::Config;
+use nzxt_ctl_common::config::{self, Config};
 use hwmon::{HwmonChannel, TempSensor};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-use crate::config::{ChannelCurve, Mode, TempSource};
+use nzxt_ctl_common::config::{ChannelCurve, Mode, TempSource};
 
 /// Pure decision function extracted from the control loop so it can be unit
 /// tested without real hwmon paths. Given the active mode, whether the
@@ -41,7 +41,7 @@ pub fn decide_duty(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CurvePoint;
+    use nzxt_ctl_common::config::CurvePoint;
 
     fn curve(source: TempSource, points: &[(f32, u8)]) -> ChannelCurve {
         ChannelCurve {

@@ -1,4 +1,4 @@
-use crate::{config, ipc_client};
+use crate::{config, ipc_client, settings};
 use core::pin::Pin;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
@@ -37,7 +37,21 @@ pub mod qobject {
         /// avoids hand-rolling QVariantList<QVariantMap> marshalling for
         /// what is really just a small list of {temp_c, duty_pct} pairs.
         #[qproperty(QString, curves_json, cxx_name = "curvesJson")]
+        /// Fixed duty% both channels run at in Silent mode. i32 because
+        /// that's what QML SpinBox speaks; clamped to 0-100 on save.
+        #[qproperty(i32, silent_duty, cxx_name = "silentDuty")]
+        /// Liquid temp at which the daemon forces 100% regardless of mode.
+        /// Whole degrees only in the UI; the config's 40 °C floor is
+        /// enforced by the shared Config::validate() on save.
+        #[qproperty(i32, failsafe_temp, cxx_name = "failsafeTemp")]
         #[qproperty(QString, status_message, cxx_name = "statusMessage")]
+        // GUI-only preferences, persisted per-user (~/.config/nzxt-ctl/
+        // gui.toml) - the daemon never sees these. QML toggles set the
+        // property then call saveGuiSettings().
+        #[qproperty(bool, tray_enabled, cxx_name = "trayEnabled")]
+        #[qproperty(bool, close_to_tray, cxx_name = "closeToTray")]
+        #[qproperty(bool, start_minimized, cxx_name = "startMinimized")]
+        #[qproperty(bool, auto_start, cxx_name = "autoStart")]
         type DaemonBridge = super::DaemonBridgeRust;
 
         /// Polls the daemon over the Unix socket and refreshes every live
@@ -50,6 +64,18 @@ pub mod qobject {
         /// daemon to reload it.
         #[qinvokable]
         fn save(self: Pin<&mut Self>);
+
+        /// Re-reads the config from disk and resets every editable
+        /// property to it, discarding unsaved edits. QML must re-seed the
+        /// curve editors from curvesJson afterwards (they own their state).
+        #[qinvokable]
+        fn revert(self: Pin<&mut Self>);
+
+        /// Persists the tray/autostart properties and syncs the
+        /// ~/.config/autostart entry to match autoStart.
+        #[qinvokable]
+        #[cxx_name = "saveGuiSettings"]
+        fn save_gui_settings(self: Pin<&mut Self>);
     }
 }
 
@@ -83,7 +109,13 @@ pub struct DaemonBridgeRust {
     daemon_error: QString,
     mode: QString,
     curves_json: QString,
+    silent_duty: i32,
+    failsafe_temp: i32,
     status_message: QString,
+    tray_enabled: bool,
+    close_to_tray: bool,
+    start_minimized: bool,
+    auto_start: bool,
     /// Last successfully loaded config, kept so `save` can write back a
     /// complete file (preserving fields the GUI doesn't expose, e.g.
     /// hwmon.device_name and poll_interval_ms) rather than reconstructing
@@ -107,6 +139,9 @@ impl Default for DaemonBridgeRust {
             ),
         };
 
+        let (silent_duty, failsafe_temp) = mode_numbers(cfg.as_ref());
+        let gui = settings::load();
+
         Self {
             liquid_temp: QString::from("-- °C"),
             cpu_temp: QString::from("-- °C"),
@@ -117,8 +152,29 @@ impl Default for DaemonBridgeRust {
             daemon_error: QString::from(""),
             mode: QString::from(&mode),
             curves_json: QString::from(&curves_json),
+            silent_duty,
+            failsafe_temp,
             status_message: QString::from(&status_message),
+            tray_enabled: gui.tray_icon,
+            close_to_tray: gui.close_to_tray,
+            start_minimized: gui.start_minimized,
+            auto_start: gui.autostart,
             cfg,
+        }
+    }
+}
+
+/// (silent_duty_pct, failsafe_temp_c) as the i32s the qproperties hold,
+/// falling back to the schema defaults when no config loaded.
+fn mode_numbers(cfg: Option<&config::Config>) -> (i32, i32) {
+    match cfg {
+        Some(c) => (
+            c.mode.silent_duty_pct as i32,
+            c.mode.failsafe_temp_c.round() as i32,
+        ),
+        None => {
+            let d = config::ModeConfig::default();
+            (d.silent_duty_pct as i32, d.failsafe_temp_c.round() as i32)
         }
     }
 }
@@ -167,6 +223,11 @@ impl qobject::DaemonBridge {
             return;
         };
         cfg.mode.active = mode;
+        cfg.mode.silent_duty_pct = (*self.silent_duty()).clamp(0, 100) as u8;
+        // No clamp here: the shared Config::validate() inside config::save
+        // rejects anything below the 40 °C floor with a visible message,
+        // which beats silently writing a different number than shown.
+        cfg.mode.failsafe_temp_c = *self.failsafe_temp() as f32;
 
         let curves_str = self.curves_json().to_string();
         let curves: CurvesJson = match serde_json::from_str(&curves_str) {
@@ -201,6 +262,44 @@ impl qobject::DaemonBridge {
         // silently revert this one.
         self.as_mut().rust_mut().cfg = Some(cfg);
         self.as_mut().set_status_message(QString::from(&message));
+    }
+
+    pub fn revert(mut self: Pin<&mut Self>) {
+        match config::load() {
+            Ok(cfg) => {
+                let mode = source_mode_str(cfg.mode.active).to_string();
+                let curves = curves_to_json(&cfg);
+                let (silent_duty, failsafe_temp) = mode_numbers(Some(&cfg));
+                self.as_mut().set_mode(QString::from(&mode));
+                self.as_mut().set_curves_json(QString::from(&curves));
+                self.as_mut().set_silent_duty(silent_duty);
+                self.as_mut().set_failsafe_temp(failsafe_temp);
+                self.as_mut().rust_mut().cfg = Some(cfg);
+                self.as_mut()
+                    .set_status_message(QString::from("Reverted to saved config."));
+            }
+            Err(e) => {
+                // Keep current (possibly edited) state - a failed revert
+                // should not destroy the user's work on top of the error.
+                self.as_mut()
+                    .set_status_message(QString::from(&format!("Revert failed: {e}")));
+            }
+        }
+    }
+
+    pub fn save_gui_settings(mut self: Pin<&mut Self>) {
+        let gui = settings::GuiSettings {
+            tray_icon: *self.tray_enabled(),
+            close_to_tray: *self.close_to_tray(),
+            start_minimized: *self.start_minimized(),
+            autostart: *self.auto_start(),
+        };
+        // Success stays silent - toggles flipping is its own feedback, and
+        // spamming the status message on every switch would be noise.
+        if let Err(e) = settings::save(&gui) {
+            self.as_mut()
+                .set_status_message(QString::from(&format!("Failed to save GUI settings: {e}")));
+        }
     }
 }
 

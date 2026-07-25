@@ -296,6 +296,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cxx-qt-lib-extras"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caecf40d614ac4cc448ac6baf462bf4c0d1d70c5a48d6b790e9e735c8d39ef97"
+dependencies = [
+ "cxx",
+ "cxx-qt",
+ "cxx-qt-build",
+ "cxx-qt-lib",
+]
+
+[[package]]
 name = "cxx-qt-macro"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -557,6 +569,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nzxt-ctl-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "nzxt-ctl-daemon"
 version = "0.1.0"
 dependencies = [
@@ -565,9 +587,8 @@ dependencies = [
  "env_logger",
  "log",
  "nix",
- "serde",
+ "nzxt-ctl-common",
  "serde_json",
- "toml",
 ]
 
 [[package]]
@@ -579,6 +600,8 @@ dependencies = [
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
+ "cxx-qt-lib-extras",
+ "nzxt-ctl-common",
  "serde",
  "serde_json",
  "toml",
