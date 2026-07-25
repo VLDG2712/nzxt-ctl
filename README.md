@@ -77,6 +77,8 @@ Not implemented:
 - CPU temperature uses the first `temp*_input` on the matched hwmon device,
   which is usually but not always the package sensor
 
+Roadmap and open items: [PLAN.md](PLAN.md), [TODO.md](TODO.md).
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
