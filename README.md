@@ -1,5 +1,5 @@
 # nzxt-ctl
-
+I was missing this app on linux so me and claude did this!
 A native Linux fan/pump controller for NZXT Kraken AIO coolers — a daemon
 plus a Qt/Kirigami desktop app, as a replacement for NZXT CAM.
 
