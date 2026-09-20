@@ -8,14 +8,19 @@ Built and tested against a **Kraken 2023 Elite** (`1e71:300c`, firmware
 
 ## Features
 
-- Temperature-driven pump and fan curves with linear interpolation
-- Three modes: **Performance** (100%), **Silent** (fixed low duty), **Auto**
-  (curve-driven)
+- Temperature-driven pump and fan curves with linear interpolation, edited
+  as a draggable curve or as precise numeric rows
+- Three modes: **Performance** (100%), **Silent** (fixed low duty, duty %
+  editable in the GUI), **Auto** (curve-driven)
 - Each curve independently picks its temperature source: coolant, CPU, or GPU
 - Safety failsafe: if coolant temperature reaches a configured ceiling
-  (default 60 °C), both channels are forced to 100% regardless of mode
+  (default 60 °C, editable in the GUI down to a 40 °C floor), both channels
+  are forced to 100% regardless of mode
 - Live dashboard: coolant/CPU/GPU temperature, pump/fan RPM and duty
-- Runs at boot via systemd, with config hot-reload from the GUI
+- System tray icon with a mode-changer menu; optional close/start-to-tray
+  and launch-on-login
+- Runs at boot via systemd, with config hot-reload and revert-to-saved from
+  the GUI
 
 ## How it works
 
@@ -34,6 +39,8 @@ from `nvidia-smi` (optional — if absent, only that reading is unavailable).
 ## Architecture
 
 ```
+common/   config schema, validation and IPC wire types, shared by both
+          binaries below
 daemon/   background service (root) - reads sensors, applies curves,
           serves live state over a Unix socket
 gui/      Qt6/QML + Kirigami desktop app (regular user) - dashboard and
@@ -49,7 +56,8 @@ than a world-writable socket. The IPC protocol is JSON lines over
 
 ## Installation
 
-See [INSTALL.md](INSTALL.md).
+On Arch, via the AUR: `yay -S nzxt-ctl-git` (or any AUR helper). For a
+manual build/install, see [INSTALL.md](INSTALL.md).
 
 ## Configuration
 
@@ -63,7 +71,8 @@ so `poll_interval_ms` must appear *before* the first `[section]`.
 ## Status and limitations
 
 Working and verified on hardware: curve control, all three modes, config
-hot-reload, boot persistence via systemd.
+hot-reload, boot persistence via systemd (including a real reboot with a
+cold driver bind, not just a warm restart).
 
 Not implemented:
 
@@ -71,13 +80,10 @@ Not implemented:
   handles this today (`liquidctl set lcd screen static image.png`) despite
   listing this PID as unsupported.
 - **RGB control** for the separate `1e71:2012` RGB controller device
-- **Graphical curve editing** — the editor is numeric rows, not drag-points
 - The failsafe override is covered by unit tests but has not been triggered
   by real sustained heat
 - CPU temperature uses the first `temp*_input` on the matched hwmon device,
   which is usually but not always the package sensor
-
-Roadmap and open items: [PLAN.md](PLAN.md), [TODO.md](TODO.md).
 
 ## License
 

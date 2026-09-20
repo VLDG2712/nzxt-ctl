@@ -1,5 +1,8 @@
 # Installing nzxt-ctl
 
+On Arch, `yay -S nzxt-ctl-git` (or any AUR helper) does everything below
+for you. This guide is for building and installing by hand instead.
+
 ## 0. Dependencies
 
 The daemon needs no runtime dependencies beyond the `nzxt_kraken3` kernel
