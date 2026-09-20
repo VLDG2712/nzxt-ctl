@@ -1,10 +1,17 @@
 [Unit]
 Description=NZXT Kraken fan/pump curve control daemon
+# multi-user.target ordering does NOT guarantee USB devices have finished
+# enumerating or that nzxt_kraken3 has bound and created the hwmon entry -
+# this is best-effort ordering only. The daemon itself retries hwmon
+# discovery for up to 30s internally (see hwmon.rs) to cover the actual
+# race; this unit's TimeoutStartSec below just needs to exceed that so
+# systemd doesn't kill the process while it's legitimately still retrying.
 After=multi-user.target
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/nzxt-ctl-daemon
+TimeoutStartSec=45
 Restart=on-failure
 RestartSec=2
 Environment=RUST_LOG=info

@@ -30,8 +30,12 @@ fn main() -> Result<()> {
 
     // Resolve the actual hwmon path by device name, since hwmonN numbers
     // shift across reboots (confirmed empirically: hwmon5 -> hwmon2 on the
-    // same machine between runs).
-    let hwmon_path = hwmon::discover_hwmon_path(&cfg.hwmon.device_name)?;
+    // same machine between runs). Retries for up to 30s: at boot, systemd
+    // can start this daemon before USB enumeration and the nzxt_kraken3
+    // driver have finished binding - a single fail-fast attempt races
+    // this. The systemd unit's TimeoutStartSec must exceed this window.
+    let hwmon_path =
+        hwmon::discover_hwmon_path_with_retry(&cfg.hwmon.device_name, Duration::from_secs(30))?;
     let hwmon_path_str = hwmon_path.to_string_lossy().to_string();
 
     let liquid_temp_sensor = TempSensor::new(&hwmon_path_str, 1);

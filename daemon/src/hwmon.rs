@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 /// hwmonN numbers are NOT stable across reboots/kernel updates - confirmed
 /// empirically (moved from hwmon5 to hwmon2 between runs on the same
@@ -28,6 +29,59 @@ pub fn discover_hwmon_path(expected_name: &str) -> Result<PathBuf> {
         expected_name,
         hwmon_root
     );
+}
+
+/// Retries discover_hwmon_path for up to `timeout` before giving up. At
+/// boot, systemd can start this daemon before USB enumeration and the
+/// nzxt_kraken3 driver have finished binding and created the hwmon entry -
+/// a single fail-fast attempt races this and fails right after boot even
+/// though the device is fine a moment later. Confirmed as a real boot-time
+/// failure mode (not hypothetical) via the journal.
+///
+/// NOTE: this only covers a slow-to-appear device. If the device is
+/// genuinely absent (unplugged, disconnected mid-session - confirmed
+/// separately via `dmesg` showing a USB disconnect with no reconnect),
+/// this will still exhaust the full timeout and fail; no retry window
+/// fixes a device that just isn't there.
+pub fn discover_hwmon_path_with_retry(expected_name: &str, timeout: Duration) -> Result<PathBuf> {
+    let start = Instant::now();
+    let mut attempt: u32 = 1;
+
+    loop {
+        match discover_hwmon_path(expected_name) {
+            Ok(path) => {
+                if attempt > 1 {
+                    log::info!(
+                        "hwmon device found on attempt {} after {:.1}s",
+                        attempt,
+                        start.elapsed().as_secs_f32()
+                    );
+                }
+                return Ok(path);
+            }
+            Err(e) => {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    return Err(e.context(format!(
+                        "hwmon device '{}' not found after {} attempts over {:.1}s (timeout {:.1}s) - giving up",
+                        expected_name,
+                        attempt,
+                        elapsed.as_secs_f32(),
+                        timeout.as_secs_f32()
+                    )));
+                }
+                log::warn!(
+                    "hwmon device '{}' not found yet (attempt {}, {:.1}s elapsed) - retrying: {}",
+                    expected_name,
+                    attempt,
+                    elapsed.as_secs_f32(),
+                    e
+                );
+                std::thread::sleep(Duration::from_millis(500));
+                attempt += 1;
+            }
+        }
+    }
 }
 
 /// Wraps read/write access to one hwmon PWM channel (pump=1, fan=2 on this
