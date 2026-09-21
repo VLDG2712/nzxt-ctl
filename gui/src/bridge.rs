@@ -343,7 +343,7 @@ fn apply_curve(target: &mut config::ChannelCurve, src: &CurveJson) -> Result<(),
             duty_pct: p.duty_pct.min(100),
         })
         .collect();
-    points.sort_by(|a, b| a.temp_c.partial_cmp(&b.temp_c).unwrap());
+    points.sort_by(|a, b| a.temp_c.total_cmp(&b.temp_c));
     target.temp_source = temp_source;
     target.points = points;
     Ok(())

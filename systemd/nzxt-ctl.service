@@ -24,5 +24,26 @@ Environment=NZXT_CTL_CONFIG=/etc/nzxt-ctl/config.toml
 # not done here since it depends on your exact udev setup.
 User=root
 
+# Sandboxing. Deliberately NOT set: ProtectKernelTunables (would make /sys
+# read-only - we write pwm there), PrivateDevices (we need /dev/hidraw*,
+# /dev/bus/usb for the LCD and /dev/nvidia* for nvidia-smi), and
+# ProtectProc (nvidia-smi). ProtectSystem=strict leaves /dev, /proc and
+# /sys writable; the socket dir comes from RuntimeDirectory.
+RuntimeDirectory=nzxt-ctl
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
 [Install]
 WantedBy=multi-user.target

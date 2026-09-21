@@ -58,6 +58,10 @@ const BUCKET_SIZE_KB: u16 = 0x0641;
 /// unattended rather than under active observation).
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+/// Per-report wait in `hid_command`. Real responses arrive within
+/// milliseconds; this only bounds the failure case.
+const HID_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub struct LcdController {
     hid: File,
     resolution: (u32, u32),
@@ -161,6 +165,7 @@ fn hid_command(hid: &mut File, cmd: &[u8], expect_header: [u8; 2]) -> Result<[u8
     // second - correctness matters more than shaving attempts here.
     const MAX_ATTEMPTS: u32 = 200;
     for attempt in 1..=MAX_ATTEMPTS {
+        wait_readable(hid, HID_READ_TIMEOUT)?;
         let mut response = [0u8; 64];
         hid.read_exact(&mut response).context("reading HID response")?;
         if response[0] == expect_header[0] && response[1] == expect_header[1] {
@@ -179,6 +184,20 @@ fn hid_command(hid: &mut File, cmd: &[u8], expect_header: [u8; 2]) -> Result<[u8
         "no HID response matching {:02x?} after {MAX_ATTEMPTS} packets - is another process also talking to the device?",
         expect_header
     )
+}
+
+/// Blocks until `hid` has a report to read, or bails after `timeout`. A
+/// plain blocking read would hang forever if the device stopped
+/// answering (a wedged panel, a mid-command unplug), taking whichever
+/// thread issued the command with it.
+fn wait_readable(hid: &File, timeout: Duration) -> Result<()> {
+    use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+    use std::os::fd::AsFd;
+    let mut fds = [PollFd::new(hid.as_fd(), PollFlags::POLLIN)];
+    let timeout = PollTimeout::try_from(timeout).unwrap_or(PollTimeout::MAX);
+    let ready = poll(&mut fds, timeout).context("polling hidraw device")?;
+    anyhow::ensure!(ready > 0, "no HID response within {:?} - device not answering", timeout);
+    Ok(())
 }
 
 /// True if byte 14 of the response is 0x01 - the device's own
@@ -291,18 +310,6 @@ impl LcdController {
     /// must be exactly `width * height * 4` bytes (the alpha byte is
     /// present but ignored by the firmware in this mode).
     pub fn upload(&mut self, rgba: &[u8]) -> Result<()> {
-        self.upload_paced(rgba, &|_| Duration::ZERO)
-    }
-
-    /// `upload` with a caller-chosen pause after each protocol step (keyed
-    /// by step name, each logged at debug level) - a hardware-debugging
-    /// aid for pinning down which step the firmware reacts to visibly.
-    /// `upload` is this with zero pauses.
-    pub fn upload_paced(&mut self, rgba: &[u8], pause: &dyn Fn(&str) -> Duration) -> Result<()> {
-        let step = |name: &str| {
-            log::debug!("upload step: {name}");
-            std::thread::sleep(pause(name));
-        };
         anyhow::ensure!(
             rgba.len() == self.frame_len,
             "frame size {} does not match expected {} for {:?}",
@@ -320,15 +327,11 @@ impl LcdController {
             Some(b) if b == BUCKETS[0] => BUCKETS[1],
             _ => BUCKETS[0],
         };
-        step("begin (previous frame should be on screen)");
         self.prepare_bucket(target)?;
-        step("bucket deleted+created");
 
         hid_command(&mut self.hid, &[0x36, 0x03], [0x37, 0x03])?; // cancel any stale transfer
-        step("cancel 36 03");
         let resp = hid_command(&mut self.hid, &[0x36, 0x01, target], [0x37, 0x01])?;
         ensure_ok(&resp, "device refused to start LCD data transfer")?;
-        step("start transfer 36 01");
 
         let mut header = Vec::with_capacity(BULK_MAGIC.len() + 8);
         header.extend_from_slice(&BULK_MAGIC);
@@ -336,15 +339,12 @@ impl LcdController {
         header.extend_from_slice(&[0, 0, 0]);
         header.extend_from_slice(&(rotated.len() as u32).to_le_bytes());
         self.bulk_write(&header, rotated)?;
-        step("bulk data sent");
 
         let resp = hid_command(&mut self.hid, &[0x36, 0x02], [0x37, 0x02])?;
         ensure_ok(&resp, "device refused to end LCD data transfer")?;
-        step("end transfer 36 02");
 
         self.switch_to(target)?;
         self.active_bucket = Some(target);
-        step("switched to new bucket");
         Ok(())
     }
 

@@ -213,7 +213,11 @@ pub fn read_nvidia_gpu_temp() -> Result<f32> {
     // If multiple GPUs are present, nvidia-smi prints one line per GPU -
     // we only take the first line/GPU for now.
     let first_line = text.lines().next().unwrap_or("").trim();
-    first_line
+    let temp = first_line
         .parse::<f32>()
-        .with_context(|| format!("parsing nvidia-smi output: {:?}", text))
+        .with_context(|| format!("parsing nvidia-smi output: {:?}", text))?;
+    // "NaN"/"inf" parse as valid f32s; a non-finite temperature is a
+    // failed read, not a value to feed into curves or the gauge.
+    anyhow::ensure!(temp.is_finite(), "nvidia-smi reported a non-finite temperature: {:?}", text);
+    Ok(temp)
 }

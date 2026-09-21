@@ -208,6 +208,9 @@ pub struct Config {
     pub lcd: LcdConfig,
 }
 
+pub const MIN_POLL_INTERVAL_MS: u64 = 100;
+pub const MAX_POLL_INTERVAL_MS: u64 = 5000;
+
 impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)
@@ -235,6 +238,23 @@ impl Config {
                 self.mode.failsafe_temp_c
             );
         }
+        if self.mode.silent_duty_pct > 100 {
+            anyhow::bail!(
+                "mode.silent_duty_pct={} is out of range (0-100)",
+                self.mode.silent_duty_pct
+            );
+        }
+        // Too fast busy-loops the daemon (and spawns nvidia-smi in a tight
+        // loop); too slow delays the failsafe check, which runs once per
+        // poll. 5s still reacts well within an AIO's thermal time constant.
+        if !(MIN_POLL_INTERVAL_MS..=MAX_POLL_INTERVAL_MS).contains(&self.poll_interval_ms) {
+            anyhow::bail!(
+                "poll_interval_ms={} is out of range ({}-{})",
+                self.poll_interval_ms,
+                MIN_POLL_INTERVAL_MS,
+                MAX_POLL_INTERVAL_MS
+            );
+        }
         Ok(())
     }
 
@@ -248,12 +268,20 @@ mod tests {
     use super::*;
 
     fn write_config(name: &str, failsafe_temp_c: f32) -> std::path::PathBuf {
+        write_config_with_poll(name, failsafe_temp_c, 1000)
+    }
+
+    fn write_config_with_poll(
+        name: &str,
+        failsafe_temp_c: f32,
+        poll_interval_ms: u64,
+    ) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("nzxt-ctl-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{name}.toml"));
         let text = format!(
             r#"
-poll_interval_ms = 1000
+poll_interval_ms = {poll_interval_ms}
 
 [hwmon]
 device_name = "kraken2023elite"
@@ -279,6 +307,15 @@ points = [{{ temp_c = 20.0, duty_pct = 30 }}, {{ temp_c = 55.0, duty_pct = 100 }
         let path = write_config("rejects_low", 6.0); // plausible typo for 60.0
         let err = Config::load(&path).unwrap_err();
         assert!(err.to_string().contains("suspiciously low"));
+    }
+
+    #[test]
+    fn load_rejects_out_of_range_poll_interval() {
+        let err = Config::load(&write_config_with_poll("poll_zero", 60.0, 0)).unwrap_err();
+        assert!(err.to_string().contains("poll_interval_ms"));
+        let err = Config::load(&write_config_with_poll("poll_huge", 60.0, 60_000)).unwrap_err();
+        assert!(err.to_string().contains("poll_interval_ms"));
+        assert!(Config::load(&write_config_with_poll("poll_ok", 60.0, 5000)).is_ok());
     }
 
     #[test]

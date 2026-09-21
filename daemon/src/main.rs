@@ -1,15 +1,13 @@
 mod control;
 mod hwmon;
 mod ipc;
+mod lcd_worker;
 
 use anyhow::Result;
-use nzxt_ctl_common::config::{self, Config};
-use nzxt_ctl_daemon::{gauge, lcd};
 use hwmon::{HwmonChannel, TempSensor};
-use lcd::LcdController;
+use nzxt_ctl_common::config::{self, Config};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// This project targets the Kraken 2023 Elite specifically (see
@@ -79,43 +77,16 @@ fn main() -> Result<()> {
     log::info!("pump and fan channels in manual mode, entering control loop");
 
     // LCD is best-effort and opt-in (see nzxt_ctl_common::config::LcdConfig)
-    // - a failure here must never block fan/pump control. Shared between
-    // the control loop (renders on temp change, re-syncs on config
-    // reload) and the dedicated keep-alive thread below (resends the
-    // commit on a timer); the device's own ~30s dead-man's-switch reverts
-    // to its built-in display otherwise - see PLAN.md section 3.
-    let lcd: Arc<Mutex<Option<LcdController>>> = Arc::new(Mutex::new(None));
-    sync_lcd(&lcd, cfg.lcd.enabled);
-
-    {
-        let lcd = lcd.clone();
-        let running = running.clone();
-        thread::spawn(move || {
-            while running.load(Ordering::SeqCst) {
-                thread::sleep(lcd::KEEPALIVE_INTERVAL);
-                if let Some(ctl) = lcd.lock().unwrap().as_mut() {
-                    if let Err(e) = ctl.commit() {
-                        log::warn!("LCD keep-alive failed: {}", e);
-                    }
-                }
-            }
-        });
-    }
+    // and lives entirely on its own thread: nothing on the USB side may
+    // ever block this control loop. See lcd_worker.rs.
+    let lcd = lcd_worker::LcdHandle::spawn(LCD_RESOLUTION);
+    lcd.set_enabled(cfg.lcd.enabled);
 
     let reload_flag = Arc::new(AtomicBool::new(false));
     let shared_state = ipc::start_server(reload_flag.clone())?;
 
     let mut last_pump_duty: Option<u8> = None;
     let mut last_fan_duty: Option<u8> = None;
-    // Rounded to whole degrees, the precision the gauge displays, so this
-    // only re-renders (and re-uploads ~1.6MB over USB) when the shown
-    // value would actually change - not every poll cycle.
-    let mut last_rendered: Option<(config::TempSource, Option<i32>)> = None;
-    // Exponential moving average of the shown reading. CPU temps in
-    // particular jitter across whole-degree boundaries every poll at
-    // idle, which without smoothing meant a 1.6MB USB upload nearly
-    // every second just to flicker 41 <-> 42.
-    let mut lcd_smoothed: Option<f32> = None;
 
     while running.load(Ordering::SeqCst) {
         if reload_flag.swap(false, Ordering::SeqCst) {
@@ -127,9 +98,7 @@ fn main() -> Result<()> {
                     // hasn't changed, since the CURVE itself may have.
                     last_pump_duty = None;
                     last_fan_duty = None;
-                    sync_lcd(&lcd, cfg.lcd.enabled);
-                    last_rendered = None;
-                    lcd_smoothed = None;
+                    lcd.set_enabled(cfg.lcd.enabled);
                 }
                 Err(e) => {
                     log::error!(
@@ -235,55 +204,19 @@ fn main() -> Result<()> {
             s.failsafe_active = failsafe_triggered;
         }
 
-        if let Some(ctl) = lcd.lock().unwrap().as_mut() {
-            let source = cfg.lcd.source;
-            let shown = match source {
+        lcd.show(
+            cfg.lcd.source,
+            match cfg.lcd.source {
                 config::TempSource::Liquid => liquid_temp,
                 config::TempSource::Cpu => cpu_temp,
                 config::TempSource::Gpu => gpu_temp,
-            };
-            lcd_smoothed = match (shown, lcd_smoothed) {
-                (Some(t), Some(prev)) => Some(prev + (t - prev) * 0.3),
-                (Some(t), None) => Some(t),
-                (None, _) => None,
-            };
-            let key = (source, lcd_smoothed.map(|t| t.round() as i32));
-            if last_rendered != Some(key) {
-                let frame = gauge::render(LCD_RESOLUTION, source, lcd_smoothed);
-                match ctl.upload(&frame) {
-                    Ok(()) => last_rendered = Some(key),
-                    Err(e) => log::warn!("LCD gauge update failed: {}", e),
-                }
-            }
-        }
+            },
+        );
 
         std::thread::sleep(Duration::from_millis(cfg.poll_interval_ms));
     }
 
-    sync_lcd(&lcd, false);
+    lcd.shutdown();
     log::info!("nzxt-ctl-daemon exiting cleanly");
     Ok(())
-}
-
-/// Brings the LCD controller in line with `enabled`: opens the device
-/// when turning on, hands the panel back to its built-in screen when
-/// turning off. Init failure is logged and left as "off" - the user can
-/// fix the cause and re-save the config to retry without a restart.
-fn sync_lcd(lcd: &Mutex<Option<LcdController>>, enabled: bool) {
-    let mut slot = lcd.lock().unwrap();
-    match (enabled, slot.as_mut()) {
-        (true, None) => match LcdController::init(LCD_RESOLUTION) {
-            Ok(ctl) => {
-                log::info!("LCD gauge enabled");
-                *slot = Some(ctl);
-            }
-            Err(e) => log::warn!("LCD unavailable, continuing without it: {}", e),
-        },
-        (false, Some(ctl)) => {
-            ctl.release();
-            *slot = None;
-            log::info!("LCD gauge disabled, panel returned to built-in display");
-        }
-        _ => {}
-    }
 }

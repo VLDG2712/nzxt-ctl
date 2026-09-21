@@ -92,17 +92,26 @@ fn sync_autostart(enable: bool, path: &Path) -> Result<()> {
     }
 }
 
+/// `Exec=` is quoted and escaped per the Desktop Entry spec so a binary
+/// path containing spaces or shell-special characters still launches.
 fn desktop_entry(exe: &Path) -> String {
+    let escaped = exe
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('`', "\\`")
+        .replace('$', "\\$");
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=NZXT Control\n\
          Comment=NZXT Kraken pump/fan control\n\
-         Exec={}\n\
+         Exec=\"{}\"\n\
          Icon=cpu\n\
          Terminal=false\n\
          X-KDE-StartupNotify=false\n",
-        exe.display()
+        escaped
     )
 }
 
