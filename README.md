@@ -21,6 +21,10 @@ Built and tested against a **Kraken 2023 Elite** (`1e71:300c`, firmware
   and launch-on-login
 - Runs at boot via systemd, with config hot-reload and revert-to-saved from
   the GUI
+- **LCD gauge** on the pump head: CPU, coolant or GPU temperature on a black
+  background with a heat-colored progress ring. Speaks the Kraken's USB
+  protocol natively (no liquidctl at runtime); toggled and sourced from the
+  GUI, applied live. Off by default.
 
 ## How it works
 
@@ -76,9 +80,8 @@ cold driver bind, not just a warm restart).
 
 Not implemented:
 
-- **LCD screen control** — the Kraken's display is untouched. `liquidctl`
-  handles this today (`liquidctl set lcd screen static image.png`) despite
-  listing this PID as unsupported.
+- **Custom LCD content** beyond the built-in temperature gauge (images,
+  GIFs, other sensors)
 - **RGB control** for the separate `1e71:2012` RGB controller device
 - The failsafe override is covered by unit tests but has not been triggered
   by real sustained heat

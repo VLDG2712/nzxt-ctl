@@ -167,6 +167,35 @@ pub struct HwmonPaths {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LcdConfig {
+    /// Off by default: this speaks the Kraken's LCD protocol directly
+    /// (reverse-engineered, see PLAN.md section 3) rather than through
+    /// liquidctl, and is new/unproven relative to the rest of this
+    /// project - opt-in until it's had more mileage.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Which temperature the on-screen gauge shows. Defaults to CPU
+    /// rather than the pump's own liquid reading: the built-in firmware
+    /// screen already shows liquid temp, so the whole point of driving
+    /// the LCD ourselves is to show something it can't.
+    #[serde(default = "default_lcd_source")]
+    pub source: TempSource,
+}
+
+fn default_lcd_source() -> TempSource {
+    TempSource::Cpu
+}
+
+impl Default for LcdConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            source: default_lcd_source(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub hwmon: HwmonPaths,
     #[serde(default)]
@@ -175,6 +204,8 @@ pub struct Config {
     pub fan_curve: ChannelCurve,
     /// How often the daemon polls temp and re-evaluates the curve, in ms.
     pub poll_interval_ms: u64,
+    #[serde(default)]
+    pub lcd: LcdConfig,
 }
 
 impl Config {

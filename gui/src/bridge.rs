@@ -44,6 +44,11 @@ pub mod qobject {
         /// Whole degrees only in the UI; the config's 40 °C floor is
         /// enforced by the shared Config::validate() on save.
         #[qproperty(i32, failsafe_temp, cxx_name = "failsafeTemp")]
+        /// Kraken LCD gauge: whether the daemon drives the panel at all,
+        /// and which reading it shows ("liquid" | "cpu" | "gpu", same
+        /// strings as the curve editors' temp sources).
+        #[qproperty(bool, lcd_enabled, cxx_name = "lcdEnabled")]
+        #[qproperty(QString, lcd_source, cxx_name = "lcdSource")]
         #[qproperty(QString, status_message, cxx_name = "statusMessage")]
         // GUI-only preferences, persisted per-user (~/.config/nzxt-ctl/
         // gui.toml) - the daemon never sees these. QML toggles set the
@@ -111,6 +116,8 @@ pub struct DaemonBridgeRust {
     curves_json: QString,
     silent_duty: i32,
     failsafe_temp: i32,
+    lcd_enabled: bool,
+    lcd_source: QString,
     status_message: QString,
     tray_enabled: bool,
     close_to_tray: bool,
@@ -140,6 +147,7 @@ impl Default for DaemonBridgeRust {
         };
 
         let (silent_duty, failsafe_temp) = mode_numbers(cfg.as_ref());
+        let lcd = cfg.as_ref().map(|c| c.lcd.clone()).unwrap_or_default();
         let gui = settings::load();
 
         Self {
@@ -154,6 +162,8 @@ impl Default for DaemonBridgeRust {
             curves_json: QString::from(&curves_json),
             silent_duty,
             failsafe_temp,
+            lcd_enabled: lcd.enabled,
+            lcd_source: QString::from(temp_source_str(lcd.source)),
             status_message: QString::from(&status_message),
             tray_enabled: gui.tray_icon,
             close_to_tray: gui.close_to_tray,
@@ -229,6 +239,16 @@ impl qobject::DaemonBridge {
         // which beats silently writing a different number than shown.
         cfg.mode.failsafe_temp_c = *self.failsafe_temp() as f32;
 
+        cfg.lcd.enabled = *self.lcd_enabled();
+        let lcd_source_str = self.lcd_source().to_string();
+        let Some(lcd_source) = parse_temp_source(&lcd_source_str) else {
+            self.as_mut().set_status_message(QString::from(&format!(
+                "Unknown LCD source: {lcd_source_str}"
+            )));
+            return;
+        };
+        cfg.lcd.source = lcd_source;
+
         let curves_str = self.curves_json().to_string();
         let curves: CurvesJson = match serde_json::from_str(&curves_str) {
             Ok(c) => c,
@@ -274,6 +294,9 @@ impl qobject::DaemonBridge {
                 self.as_mut().set_curves_json(QString::from(&curves));
                 self.as_mut().set_silent_duty(silent_duty);
                 self.as_mut().set_failsafe_temp(failsafe_temp);
+                self.as_mut().set_lcd_enabled(cfg.lcd.enabled);
+                self.as_mut()
+                    .set_lcd_source(QString::from(temp_source_str(cfg.lcd.source)));
                 self.as_mut().rust_mut().cfg = Some(cfg);
                 self.as_mut()
                     .set_status_message(QString::from("Reverted to saved config."));
@@ -430,6 +453,7 @@ mod tests {
             pump_curve: sample_curve(),
             fan_curve: sample_curve(),
             poll_interval_ms: 1000,
+            lcd: config::LcdConfig::default(),
         };
 
         let json = curves_to_json(&cfg);

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 pub use nzxt_ctl_common::config::{
-    ChannelCurve, Config, CurvePoint, HwmonPaths, Mode, ModeConfig, TempSource,
+    ChannelCurve, Config, CurvePoint, HwmonPaths, LcdConfig, Mode, ModeConfig, TempSource,
 };
 
 pub fn config_path() -> PathBuf {

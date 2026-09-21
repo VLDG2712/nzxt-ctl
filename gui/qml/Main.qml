@@ -268,6 +268,56 @@ Kirigami.ApplicationWindow {
                 }
             }
 
+            // --- LCD gauge ---
+            Kirigami.Separator { Layout.fillWidth: true }
+
+            Kirigami.Heading {
+                text: "LCD Display"
+                level: 2
+            }
+
+            Kirigami.FormLayout {
+                Layout.fillWidth: true
+
+                QQC2.Switch {
+                    Kirigami.FormData.label: "Show gauge:"
+                    checked: DaemonBridge.lcdEnabled
+                    onToggled: DaemonBridge.lcdEnabled = checked
+                    QQC2.ToolTip.text: "Replace the pump's built-in screen with a temperature gauge"
+                    QQC2.ToolTip.visible: hovered
+                    QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
+                }
+
+                QQC2.ComboBox {
+                    id: lcdSourceCombo
+                    Kirigami.FormData.label: "Reading:"
+                    enabled: DaemonBridge.lcdEnabled
+                    textRole: "text"
+                    valueRole: "value"
+                    model: [
+                        { text: "CPU", value: "cpu" },
+                        { text: "Liquid", value: "liquid" },
+                        { text: "GPU", value: "gpu" }
+                    ]
+                    onActivated: DaemonBridge.lcdSource = currentValue
+
+                    // Same pattern as the spinboxes: a Binding survives
+                    // user interaction so Revert pushes the value back.
+                    Binding {
+                        target: lcdSourceCombo
+                        property: "currentIndex"
+                        value: lcdSourceCombo.indexOfValue(DaemonBridge.lcdSource)
+                    }
+                }
+            }
+
+            QQC2.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                font: Kirigami.Theme.smallFont
+                text: "Applied with Save & Apply. Turning the gauge off hands the screen back to the pump's own display."
+            }
+
             // --- Live status ---
             Kirigami.Separator { Layout.fillWidth: true }
 

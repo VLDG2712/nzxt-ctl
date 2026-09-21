@@ -52,3 +52,11 @@ points = [
     { temp_c = 55.0, duty_pct = 90 },
     { temp_c = 65.0, duty_pct = 100 },
 ]
+
+[lcd]
+# Drives the Kraken's LCD with a temperature gauge, speaking its USB
+# protocol directly (no liquidctl dependency at runtime). Off by default;
+# toggle here or from the GUI (Save & Apply). See PLAN.md section 3.
+enabled = false
+# Which reading the gauge shows: "cpu", "liquid" or "gpu".
+source = "cpu"

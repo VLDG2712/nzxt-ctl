@@ -1,0 +1,6 @@
+DejaVu Sans is derived from the Bitstream Vera fonts, licensed under the
+Bitstream Vera license plus the DejaVu changes, both of which explicitly
+permit embedding, modification and redistribution. Full license text:
+https://dejavu-fonts.github.io/License.html
+
+Copied here for LCD gauge text rendering (see daemon/src/lcd.rs).
