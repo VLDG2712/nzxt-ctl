@@ -10,4 +10,7 @@ members = [
 # crates and warns about it.
 [profile.release]
 opt-level = 3
-lto = true
+# Thin rather than fat LTO: fat runs the final optimization pass for each
+# binary on a single core, leaving the rest idle for the longest stage
+# of an AUR build (measured 13s -> 5s for the link stage on 28 cores).
+lto = "thin"
