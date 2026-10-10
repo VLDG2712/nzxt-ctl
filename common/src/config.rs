@@ -21,6 +21,15 @@ impl Default for Mode {
 }
 
 impl Mode {
+    /// The value used in config.toml and over IPC ("performance", "silent", "auto").
+    pub fn key(&self) -> &'static str {
+        match self {
+            Mode::Performance => "performance",
+            Mode::Silent => "silent",
+            Mode::Auto => "auto",
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Mode::Performance => "Performance",
@@ -263,6 +272,35 @@ impl Config {
     }
 }
 
+/// `text` (a config.toml) with `[mode] active` set to `mode`. Everything else - comments, key
+/// order, formatting - is kept byte for byte. The result is parsed and validated before it is
+/// returned, so a caller never writes a config the daemon would refuse to load.
+pub fn set_active_mode(text: &str, mode: Mode) -> anyhow::Result<String> {
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| anyhow::anyhow!("failed to parse config: {}", e))?;
+    let table = doc
+        .entry("mode")
+        .or_insert(toml_edit::table())
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("`mode` in config is not a table"))?;
+    match table.get_mut("active").and_then(|i| i.as_value_mut()) {
+        Some(v) => {
+            let decor = v.decor().clone();
+            *v = toml_edit::Value::from(mode.key());
+            *v.decor_mut() = decor;
+        }
+        None => {
+            table["active"] = toml_edit::value(mode.key());
+        }
+    }
+    let out = doc.to_string();
+    let cfg: Config =
+        toml::from_str(&out).map_err(|e| anyhow::anyhow!("edited config does not parse: {}", e))?;
+    cfg.validate()?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +354,42 @@ points = [{{ temp_c = 20.0, duty_pct = 30 }}, {{ temp_c = 55.0, duty_pct = 100 }
         let err = Config::load(&write_config_with_poll("poll_huge", 60.0, 60_000)).unwrap_err();
         assert!(err.to_string().contains("poll_interval_ms"));
         assert!(Config::load(&write_config_with_poll("poll_ok", 60.0, 5000)).is_ok());
+    }
+
+    #[test]
+    fn set_active_mode_changes_only_that_value() {
+        let path = write_config("set_mode", 60.0);
+        let before = std::fs::read_to_string(&path).unwrap();
+        let with_comment = before.replace(
+            "active = \"auto\"",
+            "active = \"auto\" # keep this comment",
+        );
+        let after = set_active_mode(&with_comment, Mode::Silent).unwrap();
+        assert_eq!(
+            after,
+            with_comment.replace("active = \"auto\"", "active = \"silent\""),
+            "only the value changes"
+        );
+        let cfg: Config = toml::from_str(&after).unwrap();
+        assert_eq!(cfg.mode.active, Mode::Silent);
+        assert_eq!(set_active_mode(&after, Mode::Auto).unwrap(), with_comment);
+    }
+
+    #[test]
+    fn set_active_mode_adds_a_missing_mode_table_and_refuses_bad_configs() {
+        let path = write_config("set_mode_missing", 60.0);
+        let text = std::fs::read_to_string(&path).unwrap();
+        // drop the whole [mode] table: defaults apply, setting a mode must add it
+        let start = text.find("[mode]").unwrap();
+        let end = text.find("[pump_curve]").unwrap();
+        let without = format!("{}{}", &text[..start], &text[end..]);
+        let out = set_active_mode(&without, Mode::Performance).unwrap();
+        let cfg: Config = toml::from_str(&out).unwrap();
+        assert_eq!(cfg.mode.active, Mode::Performance);
+
+        assert!(set_active_mode("not = [valid", Mode::Auto).is_err());
+        let low = std::fs::read_to_string(write_config("set_mode_low", 6.0)).unwrap();
+        assert!(set_active_mode(&low, Mode::Auto).is_err(), "never produce a config load() rejects");
     }
 
     #[test]

@@ -31,10 +31,9 @@ pub struct LiveState {
     pub failsafe_active: bool,
 }
 
-/// Requests the GUI can send over the socket. Kept minimal for v1 - just
-/// reading state and reloading config after an external edit. Direct
-/// curve-point mutation over IPC is a deliberate NOT-yet-implemented gap:
-/// see the note in the daemon's handle_client.
+/// Requests clients can send over the socket. Direct curve-point mutation
+/// over IPC is a deliberate NOT-yet-implemented gap: see the note in the
+/// daemon's handle_client.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "action")]
 pub enum Request {
@@ -43,6 +42,14 @@ pub enum Request {
     /// so the config survives daemon restarts), then asks the daemon to
     /// pick up the change without a full restart.
     ReloadConfig,
+    /// Switch the active mode, for clients that can't write the config
+    /// file themselves (e.g. a sandboxed service like Dysprosium's dysd).
+    /// The daemon edits only `[mode] active` in config.toml (comments and
+    /// layout kept, ownership/permissions preserved) and reloads, so the
+    /// change survives a restart exactly as if the GUI had made it. The
+    /// liquid-temp failsafe applies in every mode as before.
+    /// Wire form: `{"action":"SetMode","mode":"silent"}`.
+    SetMode { mode: crate::config::Mode },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,5 +57,9 @@ pub enum Request {
 pub enum Response {
     Ok { state: LiveState },
     ReloadOk,
+    /// SetMode accepted: config written, reload queued (applied on the
+    /// control loop's next iteration, so `active_mode` in GetState may lag
+    /// by up to one poll interval). `mode` is the label, e.g. "Silent".
+    ModeSet { mode: String },
     Error { message: String },
 }

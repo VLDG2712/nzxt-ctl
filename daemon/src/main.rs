@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     lcd.set_enabled(cfg.lcd.enabled);
 
     let reload_flag = Arc::new(AtomicBool::new(false));
-    let shared_state = ipc::start_server(reload_flag.clone())?;
+    let shared_state = ipc::start_server(reload_flag.clone(), config_path.clone())?;
 
     let mut last_pump_duty: Option<u8> = None;
     let mut last_fan_duty: Option<u8> = None;

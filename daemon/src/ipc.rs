@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use nzxt_ctl_common::config::{self, Mode};
 use nzxt_ctl_common::ipc::{LiveState, Request, Response, SOCKET_PATH};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -17,7 +19,10 @@ const SOCKET_GROUP: &str = "nzxt-ctl";
 /// handle for the control loop to update, and a callback-trigger channel
 /// is deliberately NOT included yet - config reload just re-reads from
 /// disk on request rather than pushing new curves live; see main.rs.
-pub fn start_server(reload_flag: Arc<std::sync::atomic::AtomicBool>) -> Result<SharedState> {
+pub fn start_server(
+    reload_flag: Arc<std::sync::atomic::AtomicBool>,
+    config_path: PathBuf,
+) -> Result<SharedState> {
     let state: SharedState = Arc::new(Mutex::new(LiveState::default()));
 
     // Clean up a stale socket file from a previous run that didn't shut
@@ -62,14 +67,16 @@ pub fn start_server(reload_flag: Arc<std::sync::atomic::AtomicBool>) -> Result<S
     log::info!("IPC socket listening at {}", SOCKET_PATH);
 
     let state_clone = state.clone();
+    let ctx = Arc::new(ConfigCtx { path: config_path, write_lock: Mutex::new(()) });
     thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
                     let state = state_clone.clone();
                     let reload_flag = reload_flag.clone();
+                    let ctx = ctx.clone();
                     thread::spawn(move || {
-                        if let Err(e) = handle_client(stream, state, reload_flag) {
+                        if let Err(e) = handle_client(stream, state, reload_flag, &ctx) {
                             log::debug!("IPC client error: {}", e);
                         }
                     });
@@ -88,10 +95,47 @@ pub fn start_server(reload_flag: Arc<std::sync::atomic::AtomicBool>) -> Result<S
 /// cheap insurance in case those permissions are ever loosened.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 
+/// Where the config lives, plus a lock so two SetMode requests (from two
+/// clients) never interleave their read-modify-write of the file.
+pub struct ConfigCtx {
+    pub path: PathBuf,
+    pub write_lock: Mutex<()>,
+}
+
+/// Rewrite only `[mode] active` in the config file. Written to a temp file
+/// in the same directory and renamed over the original, so a crash never
+/// leaves a half-written config; the temp file gets the original's owner,
+/// group and permissions first (root:nzxt-ctl 0664 per the tmpfiles rule),
+/// so the GUI can still save curves afterwards.
+fn write_active_mode(path: &Path, mode: Mode) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {:?}", path))?;
+    let new_text = config::set_active_mode(&text, mode)?;
+    if new_text == text {
+        return Ok(());
+    }
+    let meta = std::fs::metadata(path)?;
+    let tmp = path.with_extension("toml.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp).with_context(|| format!("create {:?}", tmp))?;
+        f.write_all(new_text.as_bytes())?;
+        f.sync_all()?;
+    }
+    // chown needs root (the daemon); when not root (tests), keep going with
+    // our own ownership rather than failing the whole request.
+    if let Err(e) = std::os::unix::fs::chown(&tmp, Some(meta.uid()), Some(meta.gid())) {
+        log::debug!("chown {:?} failed: {}", tmp, e);
+    }
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("rename {:?} -> {:?}", tmp, path))?;
+    Ok(())
+}
+
 fn handle_client(
     stream: UnixStream,
     state: SharedState,
     reload_flag: Arc<std::sync::atomic::AtomicBool>,
+    ctx: &ConfigCtx,
 ) -> Result<()> {
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream).take(MAX_REQUEST_BYTES);
@@ -126,6 +170,20 @@ fn handle_client(
                 reload_flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 Response::ReloadOk
             }
+            Ok(Request::SetMode { mode }) => {
+                let _guard = ctx.write_lock.lock().unwrap();
+                match write_active_mode(&ctx.path, mode) {
+                    Ok(()) => {
+                        log::info!("mode set to {} over IPC", mode.label());
+                        reload_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                        Response::ModeSet { mode: mode.label().to_string() }
+                    }
+                    Err(e) => {
+                        log::error!("SetMode {} failed, config unchanged: {:#}", mode.label(), e);
+                        Response::Error { message: format!("set mode failed: {:#}", e) }
+                    }
+                }
+            }
             Err(e) => Response::Error {
                 message: format!("invalid request: {}", e),
             },
@@ -134,4 +192,86 @@ fn handle_client(
         writeln!(writer, "{}", json)?;
     }
     Ok(())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const CONFIG: &str = r#"poll_interval_ms = 1000
+
+[hwmon]
+device_name = "kraken2023elite"
+
+[mode]
+# comment kept
+active = "auto"
+silent_duty_pct = 40
+failsafe_temp_c = 60.0
+
+[pump_curve]
+points = [{ temp_c = 20.0, duty_pct = 50 }, { temp_c = 55.0, duty_pct = 100 }]
+
+[fan_curve]
+points = [{ temp_c = 20.0, duty_pct = 30 }, { temp_c = 55.0, duty_pct = 100 }]
+"#;
+
+    /// Send one request line to handle_client over a socket pair; return the reply line.
+    fn roundtrip(ctx: &ConfigCtx, reload: &Arc<AtomicBool>, req: &str) -> String {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let state: SharedState = Arc::new(Mutex::new(LiveState::default()));
+        writeln!(client, "{}", req).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        handle_client(server, state, reload.clone(), ctx).unwrap();
+        let mut out = String::new();
+        BufReader::new(client).read_line(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn set_mode_rewrites_only_active_keeps_permissions_and_requests_reload() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("nzxt-ipc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, CONFIG).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        let ctx = ConfigCtx { path: path.clone(), write_lock: Mutex::new(()) };
+        let reload = Arc::new(AtomicBool::new(false));
+
+        let reply = roundtrip(&ctx, &reload, r#"{"action":"SetMode","mode":"silent"}"#);
+        assert_eq!(reply.trim(), r#"{"status":"ModeSet","mode":"Silent"}"#);
+        assert!(reload.load(Ordering::SeqCst));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, CONFIG.replace(r#"active = "auto""#, r#"active = "silent""#));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o664);
+        assert!(!dir.join("config.toml.tmp").exists());
+
+        // unknown mode: rejected by serde, file untouched
+        reload.store(false, Ordering::SeqCst);
+        let reply = roundtrip(&ctx, &reload, r#"{"action":"SetMode","mode":"turbo"}"#);
+        assert!(reply.contains(r#""status":"Error""#), "{}", reply);
+        assert!(!reload.load(Ordering::SeqCst));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        // an existing client's GetState still works the same
+        let reply = roundtrip(&ctx, &reload, r#"{"action":"GetState"}"#);
+        assert!(reply.starts_with(r#"{"status":"Ok","state":"#), "{}", reply);
+    }
+
+    #[test]
+    fn set_mode_refuses_to_touch_a_config_the_daemon_would_reject() {
+        let dir = std::env::temp_dir().join(format!("nzxt-ipc-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let bad = CONFIG.replace("failsafe_temp_c = 60.0", "failsafe_temp_c = 6.0");
+        std::fs::write(&path, &bad).unwrap();
+        let ctx = ConfigCtx { path: path.clone(), write_lock: Mutex::new(()) };
+        let reload = Arc::new(AtomicBool::new(false));
+        let reply = roundtrip(&ctx, &reload, r#"{"action":"SetMode","mode":"performance"}"#);
+        assert!(reply.contains("suspiciously low"), "{}", reply);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), bad);
+        assert!(!reload.load(Ordering::SeqCst));
+    }
 }
