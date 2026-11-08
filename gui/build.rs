@@ -1,26 +1,11 @@
-use cxx_qt_build::{CxxQtBuilder, QmlModule};
-
 fn main() {
-    let builder = CxxQtBuilder::new_qml_module(
-        QmlModule::new("com.local.nzxtctl")
-            .qml_file("qml/Main.qml")
-            .qml_file("qml/CurveEditor.qml")
-            .qml_file("qml/SettingsPage.qml"),
-    )
-    .files(["src/bridge.rs"]);
-
-    // GCC 16 added -Wsfinae-incomplete, which fires inside Qt's own
-    // headers (qchar.h) on every cxx-qt translation unit - dozens of lines
-    // of noise per build that have nothing to do with this crate.
-    // `flag_if_supported` keeps clang and older GCC happy.
-    // SAFETY: marked unsafe by cxx-qt-build only because the cc::Build
-    // internals carry no stability guarantee; adding a warning flag is
-    // the documented use of this hook.
-    let builder = unsafe {
-        builder.cc_builder(|cc| {
-            cc.flag_if_supported("-Wno-sfinae-incomplete");
-        })
-    };
-
-    builder.build();
+    // The widget style is fixed at compile time in Slint. "cosmic" follows
+    // the desktop's light/dark setting and accent colour at runtime (read
+    // from the xdg-desktop-portal Settings interface), so it blends in on
+    // COSMIC and still looks coherent on KDE, GNOME and others.
+    // SLINT_STYLE=fluent (etc.) at build time overrides this for testing.
+    let style = std::env::var("SLINT_STYLE").unwrap_or_else(|_| "cosmic".into());
+    let config = slint_build::CompilerConfiguration::new().with_style(style);
+    slint_build::compile_with_config("ui/app.slint", config).expect("compiling Slint UI");
+    println!("cargo:rerun-if-env-changed=SLINT_STYLE");
 }

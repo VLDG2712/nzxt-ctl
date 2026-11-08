@@ -1,10 +1,13 @@
 # nzxt-ctl
 I was missing this app on linux so me and claude did this!
 A native Linux fan/pump controller for NZXT Kraken AIO coolers — a daemon
-plus a Qt/Kirigami desktop app, as a replacement for NZXT CAM.
+plus a Slint desktop app, as a replacement for NZXT CAM.
 
 Built and tested against a **Kraken 2023 Elite** (`1e71:300c`, firmware
-2.1.0) on Arch Linux with KDE Plasma.
+2.1.0) on Arch Linux. The GUI is developed on COSMIC but is
+desktop-agnostic: it uses Slint's COSMIC style, follows the system
+light/dark setting and accent colour (via xdg-desktop-portal), and runs on
+Wayland or X11.
 
 ## Features
 
@@ -17,8 +20,10 @@ Built and tested against a **Kraken 2023 Elite** (`1e71:300c`, firmware
   (default 60 °C, editable in the GUI down to a 40 °C floor), both channels
   are forced to 100% regardless of mode
 - Live dashboard: coolant/CPU/GPU temperature, pump/fan RPM and duty
-- System tray icon with a mode-changer menu; optional close/start-to-tray
-  and launch-on-login
+- System tray icon (StatusNotifierItem) with a mode-changer menu;
+  close-to-tray, start-minimized and launch-on-login. GNOME needs the
+  AppIndicator extension for any tray icon. There is deliberately no
+  "minimize to tray": Wayland never tells an app it was minimized.
 - Runs at boot via systemd, with config hot-reload and revert-to-saved from
   the GUI
 - **LCD gauge** on the pump head: CPU, coolant or GPU temperature on a black
@@ -47,7 +52,7 @@ common/   config schema, validation and IPC wire types, shared by both
           binaries below
 daemon/   background service (root) - reads sensors, applies curves,
           serves live state over a Unix socket
-gui/      Qt6/QML + Kirigami desktop app (regular user) - dashboard and
+gui/      Slint desktop app (regular user) - dashboard and
           curve editor, talks to the daemon over that socket
 config/   sample configuration
 systemd/  service unit + sysusers group definition
@@ -62,6 +67,16 @@ than a world-writable socket. The IPC protocol is JSON lines over
 
 On Arch, via the AUR: `yay -S nzxt-ctl-git` (or any AUR helper). For a
 manual build/install, see [INSTALL.md](INSTALL.md).
+
+## Building
+
+```sh
+cargo build --release
+cargo test --workspace
+```
+
+Requires a Rust toolchain plus `fontconfig` and `pkgconf` (both already
+present on most desktops; see [INSTALL.md](INSTALL.md#0-dependencies)).
 
 ## Configuration
 
@@ -91,13 +106,3 @@ Not implemented:
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
-
-## Building
-
-```sh
-cargo build --release
-cargo test --workspace
-```
-
-Requires a Rust toolchain plus Qt6, Kirigami, CMake, extra-cmake-modules and
-Clang for the GUI (see [INSTALL.md](INSTALL.md#0-dependencies)).

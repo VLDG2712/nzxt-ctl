@@ -5,17 +5,28 @@ edition = "2021"
 
 [dependencies]
 nzxt-ctl-common = { path = "../common" }
-cxx = "1"
-cxx-qt = "0.9"
-cxx-qt-lib = { version = "0.9", features = ["qt_full"] }
+# Slint's own `system-tray` feature is left off: its tray has a hardcoded
+# SNI id ("slint-tray"), no checkmark/radio items and pixmap-only icons.
+# The tray is driven through ksni directly instead (see src/tray.rs).
+slint = { version = "1.18", default-features = false, features = [
+    "std",
+    "backend-default",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+] }
+# async-io rather than ksni's default tokio: Slint's winit backend already
+# pulls zbus with async-io (for the portal colour-scheme/accent watcher),
+# so this avoids a second async runtime and a second zbus build.
+ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1.3"
 anyhow = "1"
-cxx-qt-lib-extras = "0.9.1"
 
 [build-dependencies]
-cxx-qt-build = { version = "0.9", features = ["link_qt_object_files"] }
+slint-build = "1.18"
 
 [[bin]]
 name = "nzxt-ctl-gui"

@@ -3,7 +3,6 @@ target/
 
 # Editor / tooling local state (these contain absolute paths)
 .claude/
-.qmlls.ini
 .vscode/
 .idea/
 *.swp

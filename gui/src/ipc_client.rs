@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use nzxt_ctl_common::ipc::{Request, Response, SOCKET_PATH};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
+
+const IO_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub use nzxt_ctl_common::ipc::LiveState;
 
@@ -11,6 +14,10 @@ pub use nzxt_ctl_common::ipc::LiveState;
 fn send_request(req: &Request) -> Result<Response> {
     let mut stream = UnixStream::connect(SOCKET_PATH)
         .with_context(|| format!("connecting to daemon socket at {}", SOCKET_PATH))?;
+    // This runs on the UI thread every second: a wedged daemon must cost
+    // a short stall and an error banner, never a frozen window.
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(IO_TIMEOUT))?;
     let json = serde_json::to_string(req)?;
     writeln!(stream, "{}", json)?;
 

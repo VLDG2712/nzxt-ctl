@@ -1,0 +1,421 @@
+// Main window: live status, mode, curves, LCD gauge, and the Settings
+// page. Pure presentation - every property is fed and every callback
+// handled in src/main.rs.
+
+import { Button, Switch, SpinBox, ComboBox, ScrollView, Palette } from "std-widgets.slint";
+import { CurveEditor, CurvePoint } from "curve.slint";
+
+export { CurvePoint }
+
+component Card inherits Rectangle {
+    in property <string> title;
+    background: Palette.alternate-background;
+    border-radius: 10px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+        if root.title != "": Text {
+            text: root.title;
+            font-size: 15px;
+            font-weight: 600;
+            color: Palette.alternate-foreground;
+        }
+        @children
+    }
+}
+
+component Banner inherits Rectangle {
+    in property <string> text;
+    in property <color> tint;
+    background: self.tint.transparentize(0.82);
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: self.tint.transparentize(0.4);
+    HorizontalLayout {
+        padding: 10px;
+        padding-left: 14px;
+        Text {
+            text: root.text;
+            wrap: word-wrap;
+            color: Palette.foreground;
+        }
+    }
+}
+
+component Stat inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    background: Palette.control-background;
+    border-radius: 8px;
+    min-width: 90px;
+    VerticalLayout {
+        padding: 10px;
+        spacing: 2px;
+        Text {
+            text: root.label;
+            font-size: 11px;
+            color: Palette.foreground.transparentize(0.35);
+        }
+        Text {
+            text: root.value;
+            font-size: 16px;
+            font-weight: 600;
+            color: Palette.foreground;
+        }
+    }
+}
+
+// Label on the left, control on the right, optional hint underneath.
+component FormRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 2px;
+    HorizontalLayout {
+        spacing: 12px;
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            color: Palette.alternate-foreground;
+        }
+        @children
+    }
+    if root.hint != "": Text {
+        text: root.hint;
+        font-size: 11px;
+        wrap: word-wrap;
+        color: Palette.foreground.transparentize(0.35);
+    }
+}
+
+// Segmented control: the selected segment is drawn as a primary button.
+component Segmented inherits HorizontalLayout {
+    in property <[string]> options;
+    in-out property <int> current;
+    callback selected(int);
+    spacing: 4px;
+    for opt[i] in root.options: Button {
+        text: opt;
+        primary: i == root.current;
+        horizontal-stretch: 1;
+        clicked => {
+            root.current = i;
+            root.selected(i);
+        }
+    }
+}
+
+component SettingsPage inherits VerticalLayout {
+    in-out property <bool> tray-enabled;
+    in-out property <bool> close-to-tray;
+    in-out property <bool> start-minimized;
+    in-out property <bool> auto-start;
+    in property <bool> tray-available;
+    callback changed-settings();
+
+    spacing: 12px;
+
+    Card {
+        title: "Tray";
+        FormRow {
+            label: "Show tray icon";
+            hint: root.tray-available || !root.tray-enabled ? ""
+                : "No system tray found. GNOME needs the AppIndicator extension.";
+            Switch {
+                checked <=> root.tray-enabled;
+                toggled => { root.changed-settings(); }
+            }
+        }
+        FormRow {
+            label: "Close to tray";
+            hint: "Closing the window keeps the app running in the tray.";
+            Switch {
+                enabled: root.tray-enabled;
+                checked <=> root.close-to-tray;
+                toggled => { root.changed-settings(); }
+            }
+        }
+        FormRow {
+            label: "Start minimized";
+            hint: "Start with only the tray icon, no window.";
+            Switch {
+                enabled: root.tray-enabled;
+                checked <=> root.start-minimized;
+                toggled => { root.changed-settings(); }
+            }
+        }
+        Text {
+            text: "Tray options are disabled while the tray icon is off, since a hidden window with no tray icon has no way back.";
+            font-size: 11px;
+            wrap: word-wrap;
+            color: Palette.foreground.transparentize(0.45);
+        }
+    }
+
+    Card {
+        title: "Startup";
+        FormRow {
+            label: "Start on login";
+            hint: "Adds an entry to ~/.config/autostart.";
+            Switch {
+                checked <=> root.auto-start;
+                toggled => { root.changed-settings(); }
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "NZXT Control";
+    preferred-width: 600px;
+    preferred-height: 860px;
+    min-width: 440px;
+    min-height: 480px;
+    background: Palette.background;
+
+    // --- Live state (Rust -> UI) ---
+    in property <string> liquid-temp: "-- °C";
+    in property <string> cpu-temp: "-- °C";
+    in property <string> gpu-temp: "-- °C";
+    in property <string> pump-status: "-- rpm · --%";
+    in property <string> fan-status: "-- rpm · --%";
+    in property <bool> failsafe-active;
+    in property <string> daemon-error;
+    in-out property <string> status-message;
+
+    // --- Editable config ---
+    in-out property <int> mode-index: 2;
+    in-out property <int> silent-duty: 30;
+    in-out property <int> failsafe-temp: 60;
+    in-out property <bool> lcd-enabled;
+    in-out property <int> lcd-source-index;
+    in property <[CurvePoint]> pump-points;
+    in property <[CurvePoint]> fan-points;
+    in property <string> pump-path;
+    in property <string> fan-path;
+    in-out property <int> pump-source-index;
+    in-out property <int> fan-source-index;
+
+    // --- GUI settings ---
+    in-out property <bool> tray-enabled: true;
+    in-out property <bool> close-to-tray: true;
+    in-out property <bool> start-minimized;
+    in-out property <bool> auto-start;
+    in property <bool> tray-available;
+
+    callback save();
+    callback revert();
+    callback gui-settings-changed();
+    // channel: 0 = pump, 1 = fan
+    callback point-moved(int, int, float, int);
+    callback point-added(int, float, int);
+    callback point-removed(int, int);
+    callback point-add-next(int);
+
+    private property <bool> show-settings;
+    private property <int> curve-tab;
+    private property <[string]> sources: ["Liquid", "CPU", "GPU"];
+
+    VerticalLayout {
+        // --- Header ---
+        Rectangle {
+            background: Palette.background;
+            HorizontalLayout {
+                padding: 16px;
+                padding-bottom: 8px;
+                spacing: 8px;
+                if root.show-settings: Button {
+                    text: "‹ Back";
+                    clicked => { root.show-settings = false; }
+                }
+                Text {
+                    text: root.show-settings ? "Settings" : "NZXT Control";
+                    font-size: 20px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    color: Palette.foreground;
+                }
+                if !root.show-settings: Button {
+                    text: "Revert";
+                    clicked => { root.revert(); }
+                }
+                if !root.show-settings: Button {
+                    text: "Settings";
+                    clicked => { root.show-settings = true; }
+                }
+                if !root.show-settings: Button {
+                    text: "Save & Apply";
+                    primary: true;
+                    clicked => { root.save(); }
+                }
+            }
+        }
+
+        sv := ScrollView {
+            vertical-stretch: 1;
+            // Both content sizes are explicit: without content-height the
+            // view never scrolls, and the pages stretch to fill the
+            // viewport instead of keeping their natural height.
+            content-width: self.visible-width;
+            content-height: page.preferred-height;
+
+            page := VerticalLayout {
+                width: sv.visible-width;
+                height: self.preferred-height;
+                padding: 16px;
+                padding-top: 4px;
+
+                if root.show-settings: SettingsPage {
+                    tray-enabled <=> root.tray-enabled;
+                    close-to-tray <=> root.close-to-tray;
+                    start-minimized <=> root.start-minimized;
+                    auto-start <=> root.auto-start;
+                    tray-available: root.tray-available;
+                    changed-settings => { root.gui-settings-changed(); }
+                }
+
+                if !root.show-settings: VerticalLayout {
+                    spacing: 12px;
+
+                    if root.failsafe-active: Banner {
+                        tint: #e5484d;
+                        text: "Failsafe active: liquid temperature ceiling reached, cooling forced to 100%.";
+                    }
+                    if root.daemon-error != "": Banner {
+                        tint: #f5a524;
+                        text: "Daemon unreachable: " + root.daemon-error;
+                    }
+                    if root.status-message != "": Banner {
+                        tint: Palette.accent-background;
+                        text: root.status-message;
+                    }
+
+                    // --- Live status ---
+                    Card {
+                        title: "Live status";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Stat { label: "Liquid"; value: root.liquid-temp; }
+                            Stat { label: "CPU"; value: root.cpu-temp; }
+                            Stat { label: "GPU"; value: root.gpu-temp; }
+                        }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Stat { label: "Pump"; value: root.pump-status; }
+                            Stat { label: "Fan"; value: root.fan-status; }
+                        }
+                    }
+
+                    // --- Mode ---
+                    Card {
+                        title: "Mode";
+                        Segmented {
+                            options: ["Performance", "Silent", "Auto"];
+                            current <=> root.mode-index;
+                        }
+                        Text {
+                            text: root.mode-index == 2
+                                ? "The curves below drive pump and fan speed."
+                                : root.mode-index == 1
+                                    ? "Pump and fan run at the fixed Silent duty; the curves are ignored."
+                                    : "Pump and fan run at 100%; the curves are ignored.";
+                            font-size: 12px;
+                            wrap: word-wrap;
+                            color: Palette.foreground.transparentize(0.3);
+                        }
+                        FormRow {
+                            label: "Silent mode duty (%)";
+                            SpinBox {
+                                width: 140px;
+                                minimum: 0;
+                                maximum: 100;
+                                value <=> root.silent-duty;
+                            }
+                        }
+                        FormRow {
+                            label: "Failsafe at (°C liquid)";
+                            hint: "Forces both channels to 100% in any mode.";
+                            // Config validation refuses anything below 40 °C,
+                            // so don't let the spinbox go there at all.
+                            SpinBox {
+                                width: 140px;
+                                minimum: 40;
+                                maximum: 100;
+                                value <=> root.failsafe-temp;
+                            }
+                        }
+                    }
+
+                    // --- Curves ---
+                    Card {
+                        title: "Curves";
+                        Segmented {
+                            options: ["Pump", "Case fan"];
+                            current <=> root.curve-tab;
+                        }
+                        FormRow {
+                            label: "React to";
+                            if root.curve-tab == 0: ComboBox {
+                                width: 140px;
+                                model: root.sources;
+                                current-index <=> root.pump-source-index;
+                            }
+                            if root.curve-tab == 1: ComboBox {
+                                width: 140px;
+                                model: root.sources;
+                                current-index <=> root.fan-source-index;
+                            }
+                        }
+                        if root.curve-tab == 0: CurveEditor {
+                            points: root.pump-points;
+                            path-commands: root.pump-path;
+                            show-failsafe: root.pump-source-index == 0;
+                            failsafe-temp: root.failsafe-temp;
+                            moved(i, t, d) => { root.point-moved(0, i, t, d); }
+                            added(t, d) => { root.point-added(0, t, d); }
+                            removed(i) => { root.point-removed(0, i); }
+                            add-next => { root.point-add-next(0); }
+                        }
+                        if root.curve-tab == 1: CurveEditor {
+                            points: root.fan-points;
+                            path-commands: root.fan-path;
+                            show-failsafe: root.fan-source-index == 0;
+                            failsafe-temp: root.failsafe-temp;
+                            moved(i, t, d) => { root.point-moved(1, i, t, d); }
+                            added(t, d) => { root.point-added(1, t, d); }
+                            removed(i) => { root.point-removed(1, i); }
+                            add-next => { root.point-add-next(1); }
+                        }
+                    }
+
+                    // --- LCD ---
+                    Card {
+                        title: "LCD display";
+                        FormRow {
+                            label: "Show temperature gauge";
+                            hint: "Replaces the pump's built-in screen. Off hands the screen back to the pump.";
+                            Switch { checked <=> root.lcd-enabled; }
+                        }
+                        FormRow {
+                            label: "Reading";
+                            ComboBox {
+                                width: 140px;
+                                enabled: root.lcd-enabled;
+                                model: root.sources;
+                                current-index <=> root.lcd-source-index;
+                            }
+                        }
+                        Text {
+                            text: "Mode, curve and LCD changes take effect on Save & Apply.";
+                            font-size: 11px;
+                            wrap: word-wrap;
+                            color: Palette.foreground.transparentize(0.45);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

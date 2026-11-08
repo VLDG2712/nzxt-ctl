@@ -10,9 +10,12 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub struct GuiSettings {
     /// Show the system tray icon at all. The other tray behaviors are
-    /// meaningless (and guarded in QML) without it.
+    /// meaningless (and disabled in the UI) without it.
     pub tray_icon: bool,
-    /// Closing the window hides to tray instead of quitting.
+    /// Closing the window hides to tray instead of quitting. On by
+    /// default: it's the only way to send the window to the tray (Wayland
+    /// never tells an app it was minimized, so minimize-to-tray can't
+    /// work there).
     pub close_to_tray: bool,
     /// Start with the window hidden, tray icon only.
     pub start_minimized: bool,
@@ -24,7 +27,7 @@ impl Default for GuiSettings {
     fn default() -> Self {
         Self {
             tray_icon: true,
-            close_to_tray: false,
+            close_to_tray: true,
             start_minimized: false,
             autostart: false,
         }
@@ -110,7 +113,7 @@ fn desktop_entry(exe: &Path) -> String {
          Exec=\"{}\"\n\
          Icon=cpu\n\
          Terminal=false\n\
-         X-KDE-StartupNotify=false\n",
+         StartupNotify=false\n",
         escaped
     )
 }
@@ -134,7 +137,7 @@ mod tests {
 
         let custom = GuiSettings {
             tray_icon: false,
-            close_to_tray: true,
+            close_to_tray: false,
             start_minimized: true,
             autostart: true,
         };

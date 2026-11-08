@@ -1,0 +1,238 @@
+// Editor for one channel's fan/pump curve: the plot with draggable
+// handles, plus an optional numeric editor for precise entry.
+//
+// The point list lives in a Rust VecModel; every edit goes out through a
+// callback and comes back as a model update, so Rust stays the single
+// owner of the data and can keep the drawn line (path-commands) in sync.
+// Points are not kept sorted while editing - dragged points may cross
+// freely; Rust sorts them on save.
+
+import { Palette, Switch, SpinBox, Button } from "std-widgets.slint";
+
+export struct CurvePoint {
+    temp: float,  // °C, 0..150 (float: hand-edited configs may hold 32.5)
+    duty: int,    // %, 0..100
+}
+
+component CurvePlot inherits Rectangle {
+    in property <[CurvePoint]> points;
+    in property <string> path-commands;
+    in property <bool> show-failsafe;
+    in property <int> failsafe-temp;
+
+    callback moved(int, float, int);
+    callback added(float, int);
+    callback removed(int);
+
+    private property <float> temp-max: 150;
+    private property <length> pad-l: 40px;
+    private property <length> pad-r: 14px;
+    private property <length> pad-t: 10px;
+    private property <length> pad-b: 24px;
+    private property <length> plot-w: self.width - self.pad-l - self.pad-r;
+    private property <length> plot-h: self.height - self.pad-t - self.pad-b;
+
+    pure function x-for(t: float) -> length { root.pad-l + root.plot-w * (t / root.temp-max) }
+    pure function y-for(d: float) -> length { root.pad-t + root.plot-h * (1 - d / 100) }
+    pure function temp-at(x: length) -> float {
+        clamp((x - root.pad-l) / root.plot-w * root.temp-max, 0, root.temp-max)
+    }
+    pure function duty-at(y: length) -> float {
+        clamp((1 - (y - root.pad-t) / root.plot-h) * 100, 0, 100)
+    }
+
+    min-height: 200px;
+    preferred-height: 240px;
+    border-radius: 8px;
+    background: Palette.control-background;
+
+    // Grid + axis labels
+    for d in [0, 25, 50, 75, 100]: Rectangle {
+        x: root.pad-l;
+        y: root.y-for(d);
+        width: root.plot-w;
+        height: 1px;
+        background: Palette.foreground.transparentize(0.88);
+    }
+    for d in [0, 25, 50, 75, 100]: Text {
+        x: 4px;
+        y: root.y-for(d) - self.height / 2;
+        width: root.pad-l - 10px;
+        horizontal-alignment: right;
+        text: d + "%";
+        font-size: 10px;
+        color: Palette.foreground.transparentize(0.4);
+    }
+    for t in [0, 30, 60, 90, 120, 150]: Rectangle {
+        x: root.x-for(t);
+        y: root.pad-t;
+        width: 1px;
+        height: root.plot-h;
+        background: Palette.foreground.transparentize(0.88);
+    }
+    for t in [0, 30, 60, 90, 120, 150]: Text {
+        x: root.x-for(t) - self.width / 2;
+        y: root.height - root.pad-b + 5px;
+        text: t + "°";
+        font-size: 10px;
+        color: Palette.foreground.transparentize(0.4);
+    }
+
+    // Failsafe reference line - only meaningful against liquid temp
+    if root.show-failsafe: Rectangle {
+        x: root.x-for(root.failsafe-temp);
+        y: root.pad-t;
+        width: 2px;
+        height: root.plot-h;
+        background: #e5484d.transparentize(0.3);
+    }
+
+    // Empty-space interactions: double-click adds a point. Declared
+    // before the handles so the handles sit on top and get their own
+    // events first.
+    TouchArea {
+        x: root.pad-l;
+        y: root.pad-t;
+        width: root.plot-w;
+        height: root.plot-h;
+        double-clicked => {
+            root.added(
+                round(root.temp-at(self.mouse-x + root.pad-l)),
+                round(root.duty-at(self.mouse-y + root.pad-t)));
+        }
+    }
+
+    // The interpolated line. Path commands are in data units (°C,
+    // 100 - duty) and the viewbox maps them onto the plot area.
+    // `fit: fill` stretches non-uniformly (the default preserves the
+    // aspect ratio and centres the line, which misplaces it). A fitted
+    // Path insets its content by half the stroke width on every side, so
+    // the element is grown by that much to land exactly on the handles.
+    Path {
+        x: root.pad-l - self.stroke-width / 2;
+        y: root.pad-t - self.stroke-width / 2;
+        width: root.plot-w + self.stroke-width;
+        height: root.plot-h + self.stroke-width;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 150;
+        viewbox-height: 100;
+        fit: fill;
+        commands: root.path-commands;
+        stroke: Palette.accent-background;
+        stroke-width: 2.5px;
+    }
+
+    for p[i] in root.points: Rectangle {
+        property <bool> active: ta.pressed || ta.has-hover;
+        width: self.active ? 16px : 12px;
+        height: self.width;
+        x: root.x-for(p.temp) - self.width / 2;
+        y: root.y-for(p.duty) - self.height / 2;
+        border-radius: self.width / 2;
+        background: Palette.accent-background;
+        border-width: 2px;
+        border-color: Palette.control-background;
+
+        ta := TouchArea {
+            mouse-cursor: move;
+            // mouse-x/pressed-x are relative to this (moving) handle, so
+            // their difference is the drag delta since the last update.
+            moved => {
+                if self.pressed {
+                    root.moved(i,
+                        round(root.temp-at(parent.x + parent.width / 2 + self.mouse-x - self.pressed-x)),
+                        round(root.duty-at(parent.y + parent.height / 2 + self.mouse-y - self.pressed-y)));
+                }
+            }
+            pointer-event(ev) => {
+                // A curve with no points would be rejected on save, so
+                // never remove the last one.
+                if ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down
+                    && root.points.length > 1 {
+                    root.removed(i);
+                }
+            }
+        }
+    }
+}
+
+export component CurveEditor inherits VerticalLayout {
+    in property <[CurvePoint]> points;
+    in property <string> path-commands;
+    in property <bool> show-failsafe;
+    in property <int> failsafe-temp;
+
+    callback moved(int, float, int);
+    callback added(float, int);
+    callback removed(int);
+    callback add-next();
+
+    spacing: 8px;
+
+    CurvePlot {
+        points: root.points;
+        path-commands: root.path-commands;
+        show-failsafe: root.show-failsafe;
+        failsafe-temp: root.failsafe-temp;
+        moved(i, t, d) => { root.moved(i, t, d); }
+        added(t, d) => { root.added(t, d); }
+        removed(i) => { root.removed(i); }
+    }
+
+    Text {
+        text: "Drag points to shape the curve · double-click to add · right-click to remove";
+        font-size: 11px;
+        wrap: word-wrap;
+        color: Palette.foreground.transparentize(0.35);
+    }
+
+    numeric := Switch { text: "Numeric editor"; }
+
+    if numeric.checked: VerticalLayout {
+        spacing: 6px;
+
+        for p[i] in root.points: HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+
+            // A user edit replaces a SpinBox's `value` binding, after
+            // which canvas drags would stop showing up here. These
+            // change handlers push the model value back in regardless.
+            property <int> t: round(p.temp);
+            property <int> d: p.duty;
+            changed t => { temp-spin.value = self.t; }
+            changed d => { duty-spin.value = self.d; }
+
+            temp-spin := SpinBox {
+                width: 120px;
+                minimum: 0;
+                maximum: 150;
+                value: round(p.temp);
+                edited(v) => { root.moved(i, v, p.duty); }
+            }
+            Text { text: "°C  →"; vertical-alignment: center; color: Palette.foreground; }
+            duty-spin := SpinBox {
+                width: 120px;
+                minimum: 0;
+                maximum: 100;
+                value: p.duty;
+                edited(v) => { root.moved(i, p.temp, v); }
+            }
+            Text { text: "%"; vertical-alignment: center; color: Palette.foreground; }
+            Button {
+                text: "Remove";
+                enabled: root.points.length > 1;
+                clicked => { root.removed(i); }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: "Add point";
+                clicked => { root.add-next(); }
+            }
+        }
+    }
+}
