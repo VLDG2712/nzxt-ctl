@@ -3433,7 +3433,7 @@ dependencies = [
 
 [[package]]
 name = "nzxt-ctl-common"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "log",
@@ -3444,7 +3444,7 @@ dependencies = [
 
 [[package]]
 name = "nzxt-ctl-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -3461,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "nzxt-ctl-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ksni",
