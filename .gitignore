@@ -10,3 +10,7 @@ target/
 CLAUDE.md
 PLAN.md
 TODO.md
+packaging/nzxt-ctl-git/
+packaging/src/
+packaging/pkg/
+*.pkg.tar.*

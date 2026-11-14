@@ -1,12 +1,12 @@
 [Unit]
 Description=NZXT Kraken fan/pump curve control daemon
-# multi-user.target ordering does NOT guarantee USB devices have finished
-# enumerating or that nzxt_kraken3 has bound and created the hwmon entry -
-# this is best-effort ordering only. The daemon itself retries hwmon
-# discovery for up to 30s internally (see hwmon.rs) to cover the actual
-# race; this unit's TimeoutStartSec below just needs to exceed that so
-# systemd doesn't kill the process while it's legitimately still retrying.
-After=multi-user.target
+# No After=multi-user.target: the unit is WantedBy=multi-user.target, and a
+# target is automatically ordered after the units it wants, so ordering this
+# unit after it too is a cycle (systemd then drops jobs at boot/stop to break
+# it). Default dependencies (after sysinit/basic.target) are enough: USB
+# enumeration / nzxt_kraken3 binding isn't guaranteed by any target anyway,
+# and the daemon retries hwmon discovery for up to 30s itself (see hwmon.rs);
+# TimeoutStartSec below just needs to exceed that.
 
 [Service]
 Type=simple
@@ -31,6 +31,10 @@ User=root
 # /sys writable; the socket dir comes from RuntimeDirectory.
 RuntimeDirectory=nzxt-ctl
 ProtectSystem=strict
+# The SetMode IPC request rewrites [mode] active in the config (temp file +
+# rename in the same directory, owner/group/mode preserved), so the daemon
+# needs write access to its own config directory and nothing else in /etc.
+ReadWritePaths=/etc/nzxt-ctl
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
